@@ -46,8 +46,16 @@ DFloatingWindow {
     property bool shouldBeVisible: false
     readonly property bool readyToMap: shouldBeVisible && content.currentPageSettled
     readonly property bool searchFocused: sidebar.searchFocused
-    property bool isCompactMode: width < SettingsMetrics.compactBreakpoint
+    // Portrait, and any window narrower than the two-pane layout, stacks the list and the page
+    readonly property bool isPortrait: width > 0 && height > width
+    readonly property bool isCompactMode: isPortrait || width < SettingsMetrics.compactBreakpoint
     property bool menuVisible: !isCompactMode
+    // A page requested while closed is shown directly on the next open
+    property bool openOnPage: false
+    readonly property real screenWidth: screen?.width ?? 0
+    readonly property real screenHeight: screen?.height ?? 0
+    // A portrait screen narrower than the desktop window opens edge to edge
+    readonly property bool fillScreen: screenWidth > 0 && screenHeight > screenWidth && screenWidth < SettingsMetrics.windowWidth
     property string keybindSearchQuery: ""
 
     signal closingModal
@@ -57,8 +65,10 @@ DFloatingWindow {
             visible = false;
         }
         CompositorService.closeNiriOverviewOnWindowFocus();
+        const page = openOnPage;
+        openOnPage = false;
         if (!shouldBeVisible && isCompactMode)
-            menuVisible = true;
+            menuVisible = !page;
         shouldBeVisible = true;
         if (readyToMap)
             visible = true;
@@ -69,6 +79,7 @@ DFloatingWindow {
     function hide() {
         shouldBeVisible = false;
         visible = false;
+        openOnPage = false;
     }
 
     function toggle() {
@@ -84,6 +95,8 @@ DFloatingWindow {
         const resolved = SettingsTabs.resolvePage(pageId);
         if (!resolved)
             return false;
+        if (!shouldBeVisible)
+            openOnPage = true;
         pageHistory = [];
         currentPage = resolved;
         return true;
@@ -177,9 +190,9 @@ DFloatingWindow {
 
     objectName: "settingsModal"
     title: I18n.tr("Settings", "settings window title")
-    minimumSize: Qt.size(SettingsMetrics.windowMinWidth, SettingsMetrics.windowMinHeight)
-    implicitWidth: SettingsMetrics.windowWidth
-    implicitHeight: heightWithin(SettingsMetrics.windowHeight, SettingsMetrics.pagePaddingH * 2 + Theme.spacingL)
+    minimumSize: Qt.size(Math.min(SettingsMetrics.windowMinWidth, screenWidth > 0 ? screenWidth : SettingsMetrics.windowMinWidth), Math.min(SettingsMetrics.windowMinHeight, screenHeight > 0 ? screenHeight : SettingsMetrics.windowMinHeight))
+    implicitWidth: fillScreen ? screenWidth : Math.min(SettingsMetrics.windowWidth, screenWidth > 0 ? screenWidth : SettingsMetrics.windowWidth)
+    implicitHeight: fillScreen ? screenHeight : heightWithin(SettingsMetrics.windowHeight, SettingsMetrics.pagePaddingH * 2 + Theme.spacingL)
     visible: false
 
     onClosed: hide()
@@ -190,8 +203,13 @@ DFloatingWindow {
     }
 
     onIsCompactModeChanged: {
-        if (!isCompactMode)
+        if (!isCompactMode) {
             menuVisible = true;
+            return;
+        }
+        // Rotating into portrait keeps the page that was already on screen
+        if (shouldBeVisible)
+            menuVisible = false;
     }
 
     onCurrentPageChanged: {
@@ -205,8 +223,13 @@ DFloatingWindow {
             closingModal();
         } else {
             const revision = contentFocusScope.focusRevision;
+            const showPage = isCompactMode && !menuVisible;
             Qt.callLater(() => {
-                if (settingsModal.visible && revision === contentFocusScope.focusRevision)
+                if (!settingsModal.visible || revision !== contentFocusScope.focusRevision)
+                    return;
+                if (showPage)
+                    settingsModal.focusCurrentPage(false);
+                else
                     settingsModal.focusSearch();
             });
         }
@@ -323,9 +346,9 @@ DFloatingWindow {
                     anchors.fill: parent
                     anchors.leftMargin: body.paneInset
                     anchors.rightMargin: body.paneInset
-                    radius: SettingsMetrics.paneRadius
+                    radius: body.paneInset > 0 ? SettingsMetrics.paneRadius : 0
                     color: SettingsMetrics.paneColor
-                    border.width: Theme.layerOutlineWidth
+                    border.width: body.paneInset > 0 ? Theme.layerOutlineWidth : 0
                     border.color: Theme.outlineMedium
                 }
 
@@ -405,7 +428,8 @@ DFloatingWindow {
             Item {
                 id: body
 
-                readonly property real paneInset: SettingsMetrics.paneMargin
+                // Stacked navigation has no floating pane: the list and the page each fill the window
+                readonly property real paneInset: settingsModal.isCompactMode ? 0 : SettingsMetrics.paneMargin
                 readonly property real paneSpace: width - sidebar.width - paneInset
 
                 width: parent.width
@@ -441,9 +465,9 @@ DFloatingWindow {
                     }
                     width: settingsModal.isCompactMode ? body.width - body.paneInset * 2 : Math.min(body.paneSpace, SettingsMetrics.paneMaxWidth)
                     height: body.height - body.paneInset
-                    radius: SettingsMetrics.paneRadius
+                    radius: settingsModal.isCompactMode ? 0 : SettingsMetrics.paneRadius
                     color: SettingsMetrics.paneColor
-                    border.width: Theme.layerOutlineWidth
+                    border.width: settingsModal.isCompactMode ? 0 : Theme.layerOutlineWidth
                     border.color: Theme.outlineMedium
                     clip: true
 
